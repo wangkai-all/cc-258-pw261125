@@ -1,0 +1,21 @@
+{
+  "name": "two-source-consistent-query",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A local query page that joins a snapshot source and a revision-only source without pretending a global transaction exists.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node scripts/dev.js",
+    "sources": "node src/sources/start.js both",
+    "server": "node src/server.js",
+    "test": "node --test test/sources.test.js test/coordinator.test.js test/cache-resume.test.js",
+    "test:e2e": "node --test test/e2e.test.js",
+    "compare": "node scripts/compare.js"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "devDependencies": {
+    "playwright": "1.65.1"
+  }
+}

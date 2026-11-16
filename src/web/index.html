@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>跨来源查询 · 版本承诺实验台</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <div>
+      <h1>跨来源查询 · 版本承诺实验台</h1>
+      <p class="sub">快照来源 A × 修订来源 B · 没有全局事务，只有可验证的读版承诺</p>
+    </div>
+  </div>
+  <div class="live" id="live-status" aria-live="polite">
+    <span class="pill" data-src="A">A <b id="live-a">…</b></span>
+    <span class="pill" data-src="B">B <b id="live-b">…</b></span>
+    <button class="ghost" id="refresh-all" type="button">刷新状态</button>
+  </div>
+</header>
+
+<div class="notice" role="note">
+  <strong>这不是全局事务。</strong>
+  两个来源各自提供「可重读的版本」：A 用快照 token，B 用修订号。协调器固定一组版本后逐页读取；
+  任一来源失败时，它停在失败位置，不把不同时间的数据拼进同一页，也不在已输出前缀之后悄悄换版本。
+</div>
+
+<main class="layout">
+  <aside class="rail">
+    <section class="card">
+      <h2>新建查询</h2>
+      <form id="new-run" class="stack">
+        <label>区域
+          <select name="region">
+            <option value="">全部</option>
+            <option>EU</option><option>US</option><option>APAC</option>
+          </select>
+        </label>
+        <label>套餐
+          <select name="plan">
+            <option value="">全部</option>
+            <option>Basic</option><option>Pro</option><option>Enterprise</option>
+          </select>
+        </label>
+        <label>最低余额（分）
+          <input name="min_balance" type="number" min="0" step="1000" placeholder="不限">
+        </label>
+        <div class="row2">
+          <label>每页行数
+            <input name="limit" type="number" min="1" max="200" value="40" required>
+          </label>
+          <label>连接方式
+            <select name="join">
+              <option value="left">left（保留无活动账户）</option>
+              <option value="inner">inner（仅两边都有）</option>
+            </select>
+          </label>
+        </div>
+        <fieldset class="policy-pick">
+          <legend>初始承诺</legend>
+          <label class="radio"><input type="radio" name="policy" value="pin" checked> <span>固定版本 pin</span></label>
+          <label class="radio"><input type="radio" name="policy" value="restart"> <span>整次重试 restart</span></label>
+          <label class="radio"><input type="radio" name="policy" value="mixed"> <span>显式不一致 mixed</span></label>
+        </fieldset>
+        <button class="primary" type="submit">绑定版本并开始</button>
+        <p class="hint">绑定会把 A 的最新快照与 B 的最新修订写成一条可核对的 binding，之后不再漂移。</p>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>来源面板</h2>
+      <div class="source-head">
+        <div>
+          <span class="tag a">A</span> 快照 · accounts
+          <div class="big" id="a-version">—</div>
+          <div class="muted" id="a-meta">—</div>
+        </div>
+        <div>
+          <span class="tag b">B</span> 修订 · activity
+          <div class="big" id="b-version">—</div>
+          <div class="muted" id="b-meta">—</div>
+        </div>
+      </div>
+      <div class="btnrow">
+        <button class="small" type="button" data-src-action="a:update">A 数据更新 + 快照</button>
+        <button class="small" type="button" data-src-action="b:bump">B 提交新修订</button>
+      </div>
+      <details class="faultbox">
+        <summary>故障注入 / 降速（验证失败位置）</summary>
+        <div class="fault-grid">
+          <fieldset>
+            <legend><span class="tag a">A</span></legend>
+            <label>延迟 ms <input id="a-delay" type="number" min="0" max="30000" value="0"></label>
+            <label>接下来 N 次读取失败 <input id="a-failn" type="number" min="0" max="100" value="0"></label>
+            <label>读 # 失败一次 <input id="a-failat" type="number" min="1" value="3"></label>
+            <div class="btnrow">
+              <button class="small" type="button" id="a-apply-fault">应用</button>
+              <button class="small ghost" type="button" id="a-clear-fault">清除</button>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend><span class="tag b">B</span></legend>
+            <label>延迟 ms <input id="b-delay" type="number" min="0" max="30000" value="0"></label>
+            <label>接下来 N 次读取失败 <input id="b-failn" type="number" min="0" max="100" value="0"></label>
+            <label>读 # 失败一次 <input id="b-failat" type="number" min="1" value="3"></label>
+            <div class="btnrow">
+              <button class="small" type="button" id="b-apply-fault">应用</button>
+              <button class="small ghost" type="button" id="b-clear-fault">清除</button>
+            </div>
+          </fieldset>
+        </div>
+        <p class="hint">该来源的读取计数按「读 / 探测」分别计数，应用故障会重置计数。</p>
+      </details>
+      <div class="readlog">
+        <h3>来源读取记录</h3>
+        <div id="read-log" class="log-lines" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>最近运行</h2>
+      <div id="recent-runs" class="run-list"></div>
+      <div class="btnrow">
+        <button class="small ghost danger" type="button" id="purge-runs">清空协调器状态</button>
+      </div>
+    </section>
+  </aside>
+
+  <section class="work">
+    <div id="empty" class="empty card">
+      <h2>还没有绑定任何查询</h2>
+      <p>在左侧选择过滤条件与初始承诺，然后点击「绑定版本并开始」。
+      页面会显示每个来源实际读取的版本、已输出的范围、失败停在哪里，以及结果究竟来自哪一组版本。</p>
+    </div>
+
+    <div id="run-view" hidden>
+      <section class="card run-head">
+        <div class="run-title">
+          <div>
+            <div class="muted">运行</div>
+            <div class="mono strong" id="run-id">—</div>
+          </div>
+          <div class="statebox">
+            <span class="state" id="run-state">—</span>
+            <span class="muted" id="run-updated">—</span>
+          </div>
+        </div>
+        <div class="contract" id="run-contract"></div>
+        <div class="statgrid">
+          <div class="stat">
+            <span class="k">A 读版</span>
+            <span class="v mono" id="stat-a">—</span>
+            <span class="s" id="stat-a-detail">—</span>
+          </div>
+          <div class="stat">
+            <span class="k">B 读版</span>
+            <span class="v mono" id="stat-b">—</span>
+            <span class="s" id="stat-b-detail">—</span>
+          </div>
+          <div class="stat">
+            <span class="k">已输出范围</span>
+            <span class="v" id="stat-emitted">—</span>
+            <span class="s" id="stat-emitted-detail">—</span>
+          </div>
+          <div class="stat">
+            <span class="k">下一读取位置</span>
+            <span class="v mono" id="stat-cursor">—</span>
+            <span class="s" id="stat-cursor-detail">—</span>
+          </div>
+        </div>
+        <div class="btnrow sticky-actions">
+          <button class="primary" type="button" id="step1">读下一页</button>
+          <button type="button" id="step3">读 3 页</button>
+          <button type="button" id="stepall">读到结束</button>
+          <span class="spacer"></span>
+          <button type="button" class="ghost" id="cancel-run">取消</button>
+          <button type="button" class="ghost" id="resume-run" hidden>恢复</button>
+          <button type="button" class="ghost" id="verify-run">校验结果来源</button>
+        </div>
+      </section>
+
+      <section class="card" id="failure-card" hidden>
+        <h2>失败位置</h2>
+        <div id="failure-body"></div>
+      </section>
+
+      <section class="card" id="retry-card" hidden>
+        <h2>重试：三种口径，三种代价</h2>
+        <p class="muted" id="retry-note"></p>
+        <div class="retry-grid" id="retry-options"></div>
+        <div class="retry-controls">
+          <label class="ack" id="ack-wrap"><input type="checkbox" id="ack"> <span id="ack-label"></span></label>
+          <span class="spacer"></span>
+          <button type="button" class="primary" id="apply-retry">按所选口径重试</button>
+        </div>
+        <p class="hint">重试前可以先去左侧更新来源，再回来重试：pin 会先重新校验两个固定版本是否仍然可读且内容未变。</p>
+      </section>
+
+      <section class="card" id="verify-card" hidden>
+        <h2>校验：结果究竟来自哪一组版本</h2>
+        <div id="verify-summary" class="verify-summary"></div>
+        <div class="timeline" id="version-timeline"></div>
+        <div id="verify-checks" class="checks"></div>
+      </section>
+
+      <section class="card">
+        <h2>已输出分页 <span class="muted" id="pages-caption"></span></h2>
+        <div class="tablewrap">
+          <table class="pages">
+            <thead>
+              <tr>
+                <th>页</th><th>A 快照</th><th>B 修订</th><th>行数</th>
+                <th>账户范围</th><th>页摘要</th><th>来源</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="pages-body"></tbody>
+          </table>
+        </div>
+        <div id="page-detail" class="page-detail" hidden></div>
+      </section>
+
+      <section class="card">
+        <h2>版本分段</h2>
+        <div id="segments" class="segments"></div>
+      </section>
+
+      <section class="card">
+        <h2>协调器事件</h2>
+        <div id="events" class="log-lines tall"></div>
+      </section>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <span>本地实验环境 · SQLite 持久化 · 取消 / 恢复 / 缓存命中都遵守同一读版承诺</span>
+  <span id="cache-stats" class="mono"></span>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>
